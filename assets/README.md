@@ -125,6 +125,8 @@ app 里正在用的是：
 | grow_lotus_pink_01_clean.png | 同上，去掉了边缘的黄绿色毛边，app 用这张 |
 | hang_crabapple_01.png | 垂下的海棠枝，花和花苞成串，枝根贴齐顶边（GPT 原图） |
 | hang_crabapple_01_clean.png | 同上，去掉了边缘的红色和黄色毛边，app 用这张 |
+| grow_lotus_pink_02.png | 粉荷新姿态：花半开侧身低头，卷边荷叶，细长花苞，茎贴齐底边（GPT 原图，对应提示词 A01） |
+| grow_lotus_pink_02_clean.png | 同上，去掉了边缘毛边，app 用这张 |
 
 ## app：app 里在用的压缩版
 
@@ -150,6 +152,7 @@ app 里正在用的是：
 | g5、g11、g23、g26、g27、g28.webp | 李清照 5、11、23、26、27、28 | 从底边长出来的植物 |
 | gnew.webp | gpt/grow_lotus_pink_01_clean | 新荷（测试中） |
 | hbegonia.webp | gpt/hang_crabapple_01_clean | 垂挂海棠（测试中） |
+| glotus2.webp | gpt/grow_lotus_pink_02_clean | 低头粉荷（测试中） |
 | fw1、fw11、fw4、fw3.webp | flower-world 01、11、04、03 | 章节页插画、封面 |
 | app_icon_512.png | fw01 加朱印 | app 图标 |
 
