@@ -159,3 +159,4 @@ app 里正在用的是：
 ## 版权提醒
 
 这个仓库是公开的。FLOWER WORLD（序光 Liora Studio）和 Camellia（DESIGN BY SIHUIZHIZAO）是第三方模板，Camellia 里还有几张照片。这些素材只适合私人使用，公开传播前请确认授权，或者把仓库改成私有。
+| `gpt/peony/` | 2026-10-23 用户给的四张牡丹拼图（`sheet_peony_*.png`，金线牡丹三张、蓝紫水彩牡丹配鱼一张）和切出来的元素 webp：牡丹 `peony_gold`/`peony_dark`/`peony_branch`/`peony_tassel`/`peony_blue`、蝴蝶 `bfly_a`–`bfly_e`、`blossom`、`gold_sprig`、`fish_a`。牡丹试样在用 |
