@@ -5,7 +5,7 @@ on:
     paths: ['replay/**', '.github/workflows/replay.yml']
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -29,6 +29,7 @@ jobs:
           VERSION_CODE: ${{ github.run_number }}
         run: |
           export VERSION_NAME="$(cat VERSION).${{ github.run_number }}"
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
           if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"; export KEYSTORE_FILE="$RUNNER_TEMP/release.jks"; fi
           gradle --no-daemon assembleRelease
           mkdir -p ../out && cp app/build/outputs/apk/release/app-release.apk "../out/chat-replay-$VERSION_NAME.apk"
@@ -36,3 +37,11 @@ jobs:
         with:
           name: chat-replay-apk
           path: out/*.apk
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --latest=false keeps the 手帐 release as the repository's "latest"
+          gh release create "replay-v$VERSION_NAME" out/*.apk --target "$GITHUB_SHA" --latest=false \
+            --title "对话回放 v$VERSION_NAME（安卓）" \
+            --notes "安卓安装包。下载 .apk，在手机上打开安装（第一次需要允许“安装未知来源应用”）。"
