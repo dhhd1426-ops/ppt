@@ -363,7 +363,7 @@ function blocksOf(m){
       if(b==null)continue;
       if(typeof b==='string'){out.push({t:'text',text:b});continue;}
       const ty=String(b.type||'');
-      if(ty==='text'){if(b.text)out.push({t:'text',text:String(b.text)});}
+      if(ty==='text'||(!ty&&typeof b.text==='string')){if(b.text)out.push({t:'text',text:String(b.text)});}
       else if(ty==='thinking'){if(b.thinking)out.push({t:'think',text:String(b.thinking)});}
       else if(ty==='tool_use'||ty==='server_tool_use'){out.push({t:'tool',name:String(b.name||'tool'),input:b.input});}
       else if(ty.endsWith('tool_result')){out.push({t:'result',name:String(b.name||''),text:flat(b.content),err:!!b.is_error});}
@@ -383,21 +383,51 @@ function blocksOf(m){
   }
   return out;
 }
+const isObj=x=>x&&typeof x==='object'&&!Array.isArray(x);
+function roleOf(m){
+  let r=m.sender??m.role??m.author??m.from??m.speaker??m.type;
+  if(r&&typeof r==='object')r=r.role||r.name||r.type;
+  r=String(r||'').toLowerCase();
+  if(['human','user','me','customer','prompt'].includes(r))return 'user';
+  if(['assistant','model','ai','claude','bot','gpt','response'].includes(r))return 'assistant';
+  if(r==='system'||r==='developer')return 'system';
+  if(r==='tool'||r==='function'||r==='tool_result')return 'tool';
+  return null;
+}
+function tOf(o,keys){
+  for(const k of keys){
+    const v=o[k];
+    if(typeof v==='string'&&v)return v;
+    if(typeof v==='number'&&v>0){const d=new Date(v<1e12?v*1000:v);if(!isNaN(d))return d.toISOString();}
+  }
+  return '';
+}
+const T_NEW=['created_at','createdAt','create_time','timestamp','time','date','started_at'];
+const T_UPD=['updated_at','updatedAt','update_time','last_message_at','modified_at'];
+const hasBody=m=>m.content!=null||m.text!=null||m.parts!=null||m.body!=null||m.value!=null||typeof m.message==='string';
+function isMsg(x){
+  if(!isObj(x))return false;
+  if(isObj(x.message)&&(roleOf(x.message)||roleOf(x))&&hasBody(x.message))return true;
+  return !!roleOf(x)&&hasBody(x);
+}
 function msgFrom(m){
-  if(!m||typeof m!=='object')return null;
-  if(m.message&&typeof m.message==='object'&&(m.type==='user'||m.type==='assistant'))m=Object.assign({},m.message,{created_at:m.timestamp});
-  const r=String(m.sender||m.role||'').toLowerCase();
-  let role=r==='human'||r==='user'?'user':(r==='assistant'||r==='model'||r==='ai')?'assistant':(r==='system'||r==='developer')?'system':null;
+  if(!isObj(m))return null;
+  let outer=null;
+  if(isObj(m.message)){outer=m;m=m.message;}
+  let role=roleOf(m)||(outer?roleOf(outer):null);
   if(!role)return null;
-  const blocks=blocksOf(m);
+  let c=m.content;
+  if(isObj(c)){if(Array.isArray(c.parts))c=c.parts;else if(typeof c.text==='string')c=c.text;else c=[c];}
+  if(c==null)c=m.parts??m.body??m.value??(typeof m.message==='string'?m.message:null);
+  const blocks=blocksOf(Object.assign({},m,{content:c}));
   if(!blocks.length)return null;
   if(role==='user'&&blocks.every(b=>b.t==='result'))role='tool';
-  return {role,time:m.created_at||m.timestamp||'',blocks};
+  return {role,time:tOf(m,T_NEW)||(outer?tOf(outer,T_NEW):''),blocks};
 }
 let seq=0;
-function convFrom(o,fallback){
-  let raw=o.chat_messages||o.messages||[];
-  if(o.current_leaf_message_uuid&&raw.some(m=>m&&m.parent_message_uuid)){
+function convFrom(o,raw,fallback){
+  raw=raw.filter(isObj);
+  if(o.current_leaf_message_uuid&&raw.some(m=>m.parent_message_uuid)){
     const map=new Map(raw.map(m=>[m.uuid,m]));const path=[];const seen=new Set();
     let cur=map.get(o.current_leaf_message_uuid);
     while(cur&&!seen.has(cur.uuid)){seen.add(cur.uuid);path.push(cur);cur=map.get(cur.parent_message_uuid);}
@@ -408,28 +438,54 @@ function convFrom(o,fallback){
   if(sys)msgs.push({role:'system',time:'',blocks:[{t:'text',text:sys}]});
   for(const m of raw){const n=msgFrom(m);if(n)msgs.push(n);}
   if(!msgs.length)return null;
-  let title=String(o.name||o.title||'').trim();
+  let title='';
+  for(const k of ['name','title','conversation_title','summary','subject','topic']){if(typeof o[k]==='string'&&o[k].trim()){title=o[k].trim();break;}}
   if(!title){
     const u=msgs.find(m=>m.role==='user');const tb=u&&u.blocks.find(b=>b.t==='text');
     title=tb?tb.text.trim().replace(/\s+/g,' ').slice(0,40):(fallback||'未命名对话');
   }
-  const created=o.created_at||msgs.find(m=>m.time)?.time||'';
-  const updated=o.updated_at||[...msgs].reverse().find(m=>m.time)?.time||created;
-  return {id:String(o.uuid||o.id||('c'+Date.now()+'-'+(seq++))),title,created,updated,msgs};
+  title=title.replace(/\s+/g,' ').slice(0,120);
+  const created=tOf(o,T_NEW)||msgs.find(m=>m.time)?.time||'';
+  const updated=tOf(o,T_UPD)||[...msgs].reverse().find(m=>m.time)?.time||created;
+  const id=o.uuid||o.id||o.conversation_id||o.conversationId||o.session_id||o.sessionId;
+  return {id:String(typeof id==='string'||typeof id==='number'?id:('c'+Date.now()+'-'+(seq++))),title,created,updated,msgs};
+}
+const msgArray=v=>{if(!Array.isArray(v))return false;let o=0,m=0;for(const x of v){if(isObj(x)){o++;if(isMsg(x))m++;}}return m>0&&m>=o*0.3;};
+/* 不依赖固定字段名：在整棵 JSON 里找「一组消息」，它所在的对象就是一个对话 */
+function findConvs(node,name,out,depth){
+  if(depth>12||node==null||typeof node!=='object')return;
+  if(Array.isArray(node)){
+    if(msgArray(node)){const c=convFrom({},node,name);if(c)out.push(c);return;}
+    for(const x of node)findConvs(x,name,out,depth+1);
+    return;
+  }
+  let used=false;
+  for(const k of Object.keys(node)){
+    let v=node[k];
+    if(k==='mapping'&&isObj(v))v=Object.values(v);
+    if(msgArray(v)){const c=convFrom(node,v,name);if(c){out.push(c);used=true;}}
+  }
+  if(used)return;
+  for(const k of Object.keys(node))findConvs(node[k],name,out,depth+1);
+}
+function describe(d){
+  const files=[];
+  (function walk(n,dep){
+    if(files.length>=6||dep>6||n==null)return;
+    if(typeof n==='string'){if(n.length<200&&/\.(jsonl?|zip|ndjson)$/i.test(n))files.push(n.split('/').pop());return;}
+    if(typeof n==='object')for(const k of Object.keys(n))walk(n[k],dep+1);
+  })(d,0);
+  const keys=isObj(d)?Object.keys(d).slice(0,8).join('、'):Array.isArray(d)?'数组，'+d.length+' 项'+(isObj(d[0])?'，每项字段：'+Object.keys(d[0]).slice(0,8).join('、'):''):typeof d;
+  let s='里面没有找到对话消息';
+  if(files.length)s+='。它像是一份清单，指向这些文件：'+[...new Set(files)].slice(0,5).join('、')+'，请导入它们，或者导入整个 zip';
+  return s+'（文件结构：'+keys+'）';
 }
 function normalizeAny(d,name){
-  const isObj=x=>x&&typeof x==='object';
-  if(Array.isArray(d)){
-    if(d.some(x=>isObj(x)&&(Array.isArray(x.chat_messages)||Array.isArray(x.messages)||Array.isArray(x.conversations))))
-      return d.filter(isObj).flatMap(x=>{try{return normalizeAny(x,name);}catch(e){return [];}});
-    const c=convFrom({messages:d},name);return c?[c]:[];
-  }
-  if(isObj(d)){
-    if(Array.isArray(d.conversations))return normalizeAny(d.conversations,name);
-    if(Array.isArray(d.chat_messages)||Array.isArray(d.messages)){const c=convFrom(d,name);return c?[c]:[];}
-    if((d.role||d.sender)&&d.content!=null){const c=convFrom({messages:[d]},name);return c?[c]:[];}
-  }
-  throw new Error('没有认出对话结构');
+  const out=[];
+  findConvs(d,name,out,0);
+  if(!out.length&&isMsg(d)){const c=convFrom({},[d],name);if(c)out.push(c);}
+  if(!out.length)throw new Error(describe(d));
+  return out;
 }
 function parseText(text,name){
   text=text.replace(/^﻿/,'').trim();
@@ -475,12 +531,12 @@ async function readFile(file){
   const buf=await file.arrayBuffer();
   const u8=new Uint8Array(buf,0,Math.min(4,buf.byteLength));
   if(u8[0]===0x50&&u8[1]===0x4b){
-    const all=zipEntries(buf).filter(e=>/\.jsonl?$/i.test(e.name));
-    let pick=all.filter(e=>/(^|\/)conversations\.json$/i.test(e.name));
-    if(!pick.length)pick=all.filter(e=>!/(^|\/)(users|projects|memories)\.json$/i.test(e.name));
-    if(!pick.length)throw new Error('zip 里没有找到 conversations.json');
-    const out=[];
-    for(const e of pick){try{out.push(...parseText(await zipText(buf,e),e.name));}catch(err){if(pick.length===1)throw err;}}
+    const entries=zipEntries(buf);
+    const all=entries.filter(e=>/\.(jsonl?|ndjson)$/i.test(e.name)&&!/(^|\/)(__MACOSX\/|\.)/.test(e.name));
+    if(!all.length)throw new Error('zip 里没有 JSON 文件（里面有：'+entries.slice(0,5).map(e=>e.name.split('/').pop()).join('、')+'）');
+    const out=[];let firstErr=null;
+    for(const e of all){try{out.push(...parseText(await zipText(buf,e),e.name.split('/').pop().replace(/\.[^.]+$/,'')));}catch(err){if(!firstErr)firstErr=err;}}
+    if(!out.length)throw new Error('zip 里的 '+all.length+' 个 JSON 文件都没有对话消息（'+all.slice(0,5).map(e=>e.name.split('/').pop()).join('、')+'）'+(firstErr?'。'+firstErr.message:''));
     return out;
   }
   return parseText(new TextDecoder().decode(buf),file.name.replace(/\.[^.]+$/,''));
@@ -533,7 +589,7 @@ function setStatus(s,err){
   const el=$('status');clearTimeout(toastT);
   if(!s){el.hidden=true;return;}
   el.textContent=s;el.classList.toggle('err',!!err);el.hidden=false;
-  toastT=setTimeout(()=>{el.hidden=true;},err?9000:4000);
+  toastT=setTimeout(()=>{el.hidden=true;},err?20000:4000);
 }
 function matches(c,q){
   if(c.title.toLowerCase().includes(q))return true;
@@ -668,7 +724,7 @@ async function importFiles(files){
   const all=[];const bad=[];
   setStatus('正在读取…');
   for(const f of files){try{all.push(...await readFile(f));}catch(e){bad.push(f.name+'：'+e.message);}}
-  if(bad.length&&!all.length){setStatus('读取失败。'+bad.join('；')+'。请确认是 Claude 导出的 zip、conversations.json 或接口返回的 JSON。',true);return;}
+  if(bad.length&&!all.length){setStatus('读取失败。'+bad.join('；')+'。把这段提示截图发给开发者，就能适配这种格式。',true);return;}
   const ok=await addConvs(all,'文件');
   if(ok&&bad.length)setStatus('已导入 '+all.length+' 个对话，另有 '+bad.length+' 个文件没读出来：'+bad.join('；'),true);
 }
