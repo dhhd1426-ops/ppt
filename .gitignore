@@ -4,3 +4,6 @@ android/app/build/
 android/local.properties
 *.jks
 out/
+replay/.gradle/
+replay/build/
+replay/app/build/

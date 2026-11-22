@@ -1,0 +1,38 @@
+name: replay
+on:
+  push:
+    branches: [main, 'claude/**']
+    paths: ['replay/**', '.github/workflows/replay.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Build signed APK
+        working-directory: replay
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          export VERSION_NAME="$(cat VERSION).${{ github.run_number }}"
+          if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"; export KEYSTORE_FILE="$RUNNER_TEMP/release.jks"; fi
+          gradle --no-daemon assembleRelease
+          mkdir -p ../out && cp app/build/outputs/apk/release/app-release.apk "../out/chat-replay-$VERSION_NAME.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chat-replay-apk
+          path: out/*.apk
