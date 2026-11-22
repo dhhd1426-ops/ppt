@@ -9,6 +9,7 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.DocumentsContract;
 import android.view.View;
 import android.view.Window;
 import android.webkit.JavascriptInterface;
@@ -24,10 +25,17 @@ import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * Shows the bundled chat-replay page in a WebView.
@@ -38,9 +46,15 @@ public class MainActivity extends Activity {
     private static final String HOST = "appassets.androidplatform.net";
     private static final String HOME = "https://" + HOST + "/index.html";
     private static final int PICK_FILES = 7;
+    private static final int SAVE_ONE = 8;
+    private static final int SAVE_FOLDER = 9;
 
     private WebView web;
     private ValueCallback<Uri[]> pendingFiles;
+    /** Files waiting for the user to choose where to save them. */
+    private String[] outNames;
+    private String[] outTexts;
+    private String outMime;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -165,6 +179,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == SAVE_ONE || request == SAVE_FOLDER) {
+            finishSave(request, result == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
         if (request != PICK_FILES || pendingFiles == null) return;
         Uri[] picked = null;
         if (result == RESULT_OK && data != null) {
@@ -180,7 +198,129 @@ public class MainActivity extends Activity {
         pendingFiles = null;
     }
 
+    private void say(String text) {
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show();
+    }
+
+    /** Reads [{name, text}, ...] as sent by the page. Returns false if it is unusable. */
+    private boolean takeFiles(String json, String mime) {
+        try {
+            JSONArray arr = new JSONArray(json);
+            if (arr.length() == 0) return false;
+            String[] names = new String[arr.length()];
+            String[] texts = new String[arr.length()];
+            for (int i = 0; i < names.length; i++) {
+                JSONObject o = arr.getJSONObject(i);
+                names[i] = o.getString("name").replace('/', '_');
+                texts[i] = o.getString("text");
+            }
+            outNames = names;
+            outTexts = texts;
+            outMime = mime == null || mime.isEmpty() ? "text/plain" : mime;
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void startSave(String json, String mime) {
+        if (!takeFiles(json, mime)) { say("导出失败：没有读到要保存的内容"); return; }
+        try {
+            if (outNames.length == 1) {
+                Intent one = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                one.addCategory(Intent.CATEGORY_OPENABLE);
+                one.setType(outMime);
+                one.putExtra(Intent.EXTRA_TITLE, outNames[0]);
+                startActivityForResult(one, SAVE_ONE);
+            } else {
+                say("选一个文件夹，" + outNames.length + " 个文件会保存进去");
+                startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), SAVE_FOLDER);
+            }
+        } catch (Exception e) {
+            outNames = null; outTexts = null;
+            say("没有找到文件管理器，可以改用“分享”");
+        }
+    }
+
+    private void finishSave(final int request, final Uri where) {
+        final String[] names = outNames, texts = outTexts;
+        final String mime = outMime;
+        outNames = null; outTexts = null;
+        if (where == null) return;                       // the user backed out of the picker
+        if (names == null || texts == null) { say("导出被系统中断了，请再试一次"); return; }
+        new Thread(() -> {
+            int done = 0;
+            for (int i = 0; i < names.length; i++) {
+                try {
+                    Uri target = where;
+                    if (request == SAVE_FOLDER) {
+                        Uri dir = DocumentsContract.buildDocumentUriUsingTree(where,
+                                DocumentsContract.getTreeDocumentId(where));
+                        target = DocumentsContract.createDocument(getContentResolver(), dir, mime, names[i]);
+                    }
+                    if (target == null) continue;
+                    try (OutputStream out = getContentResolver().openOutputStream(target)) {
+                        if (out == null) continue;
+                        out.write(texts[i].getBytes(StandardCharsets.UTF_8));
+                    }
+                    done++;
+                } catch (Exception ignored) {
+                    // counted as not saved below
+                }
+            }
+            final int saved = done;
+            runOnUiThread(() -> say(saved == names.length
+                    ? "已保存 " + saved + " 个文件"
+                    : "保存了 " + saved + " 个，" + (names.length - saved) + " 个没有保存成功，请换一个位置再试"));
+        }).start();
+    }
+
+    private void startShare(String json, String mime) {
+        if (!takeFiles(json, mime)) { say("导出失败：没有读到要分享的内容"); return; }
+        final String[] names = outNames, texts = outTexts;
+        outNames = null; outTexts = null;
+        try {
+            File dir = new File(getCacheDir(), ExportProvider.DIR);
+            if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cache");
+            File[] old = dir.listFiles();
+            if (old != null) for (File f : old) f.delete();
+            ArrayList<Uri> uris = new ArrayList<>();
+            for (int i = 0; i < names.length; i++) {
+                try (FileOutputStream out = new FileOutputStream(new File(dir, names[i]))) {
+                    out.write(texts[i].getBytes(StandardCharsets.UTF_8));
+                }
+                uris.add(ExportProvider.uriFor(names[i]));
+            }
+            Intent send;
+            if (uris.size() == 1) {
+                send = new Intent(Intent.ACTION_SEND);
+                send.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+            } else {
+                send = new Intent(Intent.ACTION_SEND_MULTIPLE);
+                send.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+            }
+            send.setType("*/*");
+            ClipData clip = ClipData.newRawUri("对话", uris.get(0));
+            for (int i = 1; i < uris.size(); i++) clip.addItem(new ClipData.Item(uris.get(i)));
+            send.setClipData(clip);
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(send, "分享导出的文件"));
+        } catch (Exception e) {
+            say("分享失败，可以改用“保存到手机”");
+        }
+    }
+
     private final class Bridge {
+        @JavascriptInterface
+        public void saveFiles(final String json, final String mime) {
+            runOnUiThread(() -> startSave(json, mime));
+        }
+
+        @JavascriptInterface
+        public void shareFiles(final String json, final String mime) {
+            runOnUiThread(() -> startShare(json, mime));
+        }
+
         @JavascriptInterface
         public void copy(final String text) {
             runOnUiThread(() -> {

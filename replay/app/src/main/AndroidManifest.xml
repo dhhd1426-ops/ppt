@@ -19,5 +19,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- hands exported files to the app chosen in the share sheet; not reachable otherwise -->
+        <provider
+            android:name=".ExportProvider"
+            android:authorities="com.dhhd.replay.export"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
