@@ -191,7 +191,7 @@ details.err>summary{color:var(--warn)}
       <textarea id="paste" placeholder="把接口返回的 JSON 贴在这里" spellcheck="false"></textarea>
       <div style="margin-top:8px"><button class="btn primary" id="pasteGo" type="button">读取</button></div>
     </div>
-    <p class="hint">可导入：官方导出的 zip 或 conversations.json、接口返回的单个对话 JSON、API 的 messages 数组、JSONL。</p>
+    <p class="hint">可导入：官方导出的 zip（如 conversations-000.zip）或其中的 JSON、记忆导出的 zip 或 Markdown、接口返回的对话 JSON、API 的 messages 数组、JSONL。</p>
     <p class="hint">文件只在这台设备的浏览器里解析，不会上传。这是一个只读的回放工具，不是 Claude 官方应用。</p>
     <input type="file" id="file" multiple hidden>
   </aside>
@@ -469,6 +469,10 @@ function findConvs(node,name,out,depth){
   for(const k of Object.keys(node))findConvs(node[k],name,out,depth+1);
 }
 function describe(d){
+  if(isObj(d)&&Array.isArray(d.data_files)){
+    const conv=d.data_files.filter(f=>isObj(f)&&/conversation/i.test(String(f.category||f.filename||''))).map(f=>String(f.filename||f.category));
+    return '这是导出清单，本身不含对话，只列出了 '+d.data_files.length+' 个下载链接。'+(conv.length?'对话在 '+conv.join('、')+'。':'')+'用登录了 Claude 的浏览器打开清单里对应的 export_url 把它下载下来，再导入下载到的 zip。链接 24 小时内有效';
+  }
   const files=[];
   (function walk(n,dep){
     if(files.length>=6||dep>6||n==null)return;
@@ -486,6 +490,15 @@ function normalizeAny(d,name){
   if(!out.length&&isMsg(d)){const c=convFrom({},[d],name);if(c)out.push(c);}
   if(!out.length)throw new Error(describe(d));
   return out;
+}
+/* 记忆、项目说明这类 Markdown 文件：当作一篇文档显示 */
+function docFrom(text,path){
+  text=String(text).replace(/^\uFEFF/,'').replace(/\r\n?/g,'\n');
+  const fm=/^---\n[\s\S]*?\n---\n?/.exec(text);
+  if(fm)text=text.slice(fm[0].length);
+  if(!text.trim())return null;
+  const title=path.replace(/^[^/]*\d{4}-\d{2}-\d{2}[^/]*\//,'').replace(/\.[^./]+$/,'');
+  return {id:'doc:'+path,title:title||path,doc:true,created:'',updated:'',msgs:[{role:'assistant',time:'',blocks:[{t:'text',text:text.trim()}]}]};
 }
 function parseText(text,name){
   text=text.replace(/^﻿/,'').trim();
@@ -531,14 +544,17 @@ async function readFile(file){
   const buf=await file.arrayBuffer();
   const u8=new Uint8Array(buf,0,Math.min(4,buf.byteLength));
   if(u8[0]===0x50&&u8[1]===0x4b){
-    const entries=zipEntries(buf);
-    const all=entries.filter(e=>/\.(jsonl?|ndjson)$/i.test(e.name)&&!/(^|\/)(__MACOSX\/|\.)/.test(e.name));
-    if(!all.length)throw new Error('zip 里没有 JSON 文件（里面有：'+entries.slice(0,5).map(e=>e.name.split('/').pop()).join('、')+'）');
+    const entries=zipEntries(buf).filter(e=>!/(^|\/)(__MACOSX\/|\.)/.test(e.name)&&!e.name.endsWith('/'));
+    const all=entries.filter(e=>/\.(jsonl?|ndjson)$/i.test(e.name));
+    const mds=entries.filter(e=>/\.(md|markdown)$/i.test(e.name));
+    if(!all.length&&!mds.length)throw new Error('zip 里没有 JSON 或 Markdown 文件（里面有：'+entries.slice(0,5).map(e=>e.name.split('/').pop()).join('、')+'）');
     const out=[];let firstErr=null;
     for(const e of all){try{out.push(...parseText(await zipText(buf,e),e.name.split('/').pop().replace(/\.[^.]+$/,'')));}catch(err){if(!firstErr)firstErr=err;}}
-    if(!out.length)throw new Error('zip 里的 '+all.length+' 个 JSON 文件都没有对话消息（'+all.slice(0,5).map(e=>e.name.split('/').pop()).join('、')+'）'+(firstErr?'。'+firstErr.message:''));
+    for(const e of mds){try{const d=docFrom(await zipText(buf,e),e.name);if(d)out.push(d);}catch(err){if(!firstErr)firstErr=err;}}
+    if(!out.length)throw new Error('zip 里的 '+(all.length+mds.length)+' 个文件都没有可显示的内容（'+all.concat(mds).slice(0,5).map(e=>e.name.split('/').pop()).join('、')+'）'+(firstErr?'。'+firstErr.message:''));
     return out;
   }
+  if(/\.(md|markdown|txt)$/i.test(file.name)){const d=docFrom(new TextDecoder().decode(buf),file.name);if(!d)throw new Error('文件是空的');return [d];}
   return parseText(new TextDecoder().decode(buf),file.name.replace(/\.[^.]+$/,''));
 }
 
@@ -604,7 +620,7 @@ function renderList(){
   if(!shown.length){el.innerHTML='<div class="empty">没有匹配的对话</div>';return;}
   let h=shown.slice(0,limit).map(c=>{
     const on=c.id===activeId&&!selecting,pk=picked.has(c.id);
-    return '<button type="button" class="item'+(on?' on':'')+(pk?' picked':'')+'" data-id="'+esc(c.id)+'"'+(selecting?' aria-pressed="'+pk+'"':'')+'>'+(selecting?'<span class="box"></span>':IC.chat)+'<span class="tx"><span class="t">'+(c.sample?'<span class="tag">示例</span>':'')+esc(c.title)+'</span><span class="d">'+esc([rel(c.updated),c.msgs.length+' 条'].filter(Boolean).join(' · '))+'</span></span></button>';
+    return '<button type="button" class="item'+(on?' on':'')+(pk?' picked':'')+'" data-id="'+esc(c.id)+'"'+(selecting?' aria-pressed="'+pk+'"':'')+'>'+(selecting?'<span class="box"></span>':IC.chat)+'<span class="tx"><span class="t">'+(c.sample?'<span class="tag">示例</span>':c.doc?'<span class="tag">文档</span>':'')+esc(c.title)+'</span><span class="d">'+esc(c.doc?'记忆或说明文件':[rel(c.updated),c.msgs.length+' 条'].filter(Boolean).join(' · '))+'</span></span></button>';
   }).join('');
   if(shown.length>limit)h+='<button type="button" class="btn more" id="more">再显示 200 个（共 '+shown.length+'）</button>';
   el.innerHTML=h;
@@ -708,6 +724,7 @@ $('speed').addEventListener('click',()=>{pb.speed=pb.speed===1?2:pb.speed===2?4:
 /* ---------- 导入 ---------- */
 async function addConvs(list,label){
   if(!list.length){setStatus(label+'里没有找到带消息的对话。',true);return false;}
+  const nDoc=list.filter(c=>c.doc).length;
   const map=new Map(convs.map(c=>[c.id,c]));
   for(const c of list)map.set(c.id,c);
   convs=[...map.values()].sort((a,b)=>String(b.updated).localeCompare(String(a.updated)));
@@ -717,14 +734,14 @@ async function addConvs(list,label){
   refresh(true);
   if(narrow()&&list.length>1)app.classList.add('pane-open');
   const ok=await store.set(convs);
-  setStatus('已导入 '+list.length+' 个对话。'+(ok?'下次打开还在。':'这次没能保存到设备，关掉页面后需要重新导入。'),!ok);
+  setStatus('已导入 '+(list.length-nDoc?(list.length-nDoc)+' 个对话':'')+(nDoc&&list.length-nDoc?'、':'')+(nDoc?nDoc+' 篇文档':'')+'。'+(ok?'下次打开还在。':'这次没能保存到设备，关掉页面后需要重新导入。'),!ok);
   return true;
 }
 async function importFiles(files){
   const all=[];const bad=[];
   setStatus('正在读取…');
   for(const f of files){try{all.push(...await readFile(f));}catch(e){bad.push(f.name+'：'+e.message);}}
-  if(bad.length&&!all.length){setStatus('读取失败。'+bad.join('；')+'。把这段提示截图发给开发者，就能适配这种格式。',true);return;}
+  if(bad.length&&!all.length){setStatus('读取失败。'+bad.join('；')+'',true);return;}
   const ok=await addConvs(all,'文件');
   if(ok&&bad.length)setStatus('已导入 '+all.length+' 个对话，另有 '+bad.length+' 个文件没读出来：'+bad.join('；'),true);
 }
