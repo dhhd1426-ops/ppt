@@ -95,6 +95,11 @@ svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke
 .head-t{min-width:0;flex:1}
 .head h1{font-size:16px;margin:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .head .sub{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who{display:flex;flex:none;border:1px solid var(--line);border-radius:17px;padding:2px;gap:1px;background:var(--panel)}
+.who button{border:0;background:transparent;border-radius:14px;padding:4px 9px;font-size:13px;color:var(--muted);white-space:nowrap}
+.who button[aria-checked="true"]{background:var(--pill);color:var(--pill-ink);font-weight:650}
+.thread.only-user .msg:not(.user),.thread.only-ai .msg:not(.ai){display:none}
+.none{color:var(--muted);font-size:14px;text-align:center;padding:40px 0}
 .scroll{flex:1;overflow-y:auto;min-height:0}
 .thread{max-width:760px;margin:0 auto;padding:18px 18px 32px;display:flex;flex-direction:column;gap:20px}
 .msg{display:flex;flex-direction:column;gap:6px;min-width:0}
@@ -226,6 +231,12 @@ details.err>summary{color:var(--warn)}
     <header class="head">
       <button class="ib" id="toggle" type="button" aria-label="显示或收起最近记录"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M9.5 5v14"/></svg></button>
       <div class="head-t"><h1 id="title"></h1><div class="sub" id="sub"></div></div>
+      <div class="who" id="who" role="radiogroup" aria-label="显示谁的消息">
+        <button type="button" role="radio" data-v="all" aria-checked="true">全部</button>
+        <button type="button" role="radio" data-v="user" aria-checked="false">我</button>
+        <button type="button" role="radio" data-v="ai" aria-checked="false">助理</button>
+      </div>
+      <button class="ib" id="headExp" type="button" aria-label="导出这个对话"><svg viewBox="0 0 24 24"><path d="M12 15V4M7.500 8.500L12 4l4.500 4.500M5 14v5h14v-5"/></svg></button>
     </header>
     <div class="scroll" id="scroll"><div class="thread" id="thread"></div></div>
     <div class="bar">
@@ -245,6 +256,11 @@ details.err>summary{color:var(--warn)}
       <button type="button" role="radio" data-v="md" aria-checked="true">Markdown</button>
       <button type="button" role="radio" data-v="txt" aria-checked="false">纯文本</button>
       <button type="button" role="radio" data-v="json" aria-checked="false">JSON</button>
+    </div>
+    <div class="seg" id="expWhoSeg" role="radiogroup" aria-label="导出谁的消息">
+      <button type="button" role="radio" data-v="all" aria-checked="true">全部消息</button>
+      <button type="button" role="radio" data-v="user" aria-checked="false">只有我的</button>
+      <button type="button" role="radio" data-v="ai" aria-checked="false">只有助理的</button>
     </div>
     <label class="sw"><span>带时间</span><input type="checkbox" id="oTime" checked></label>
     <label class="sw"><span>带思考过程</span><input type="checkbox" id="oThink"></label>
@@ -666,6 +682,7 @@ function renderConv(){
   $('title').textContent=c.title;
   $('sub').textContent=[c.sample?'示例对话':'',fmt(c.created),c.msgs.length+' 条消息'].filter(Boolean).join(' · ');
   $('thread').innerHTML=c.msgs.map(msgHtml).join('')+'<div class="typing" id="typing" hidden aria-label="正在输入"><i></i><i></i><i></i></div>';
+  applyWho();
   const s=$('scroll');s.scrollTop=s.scrollHeight;
   updateBar();
 }
@@ -678,7 +695,22 @@ function refresh(keep){
 
 /* ---------- 回放 ---------- */
 const pb={on:false,paused:false,idx:0,timer:null,speed:1};
-const msgEls=()=>[...$('thread').querySelectorAll('.msg')];
+let who='all';
+const msgEls=()=>[...$('thread').querySelectorAll(who==='user'?'.msg.user':who==='ai'?'.msg.ai':'.msg')];
+function applyWho(){
+  const t=$('thread');
+  t.classList.toggle('only-user',who==='user');t.classList.toggle('only-ai',who==='ai');
+  [...$('who').children].forEach(b=>b.setAttribute('aria-checked',String(b.dataset.v===who)));
+  let none=$('none');
+  const empty=!msgEls().length&&!!current();
+  if(empty&&!none){none=document.createElement('div');none.id='none';none.className='none';t.appendChild(none);}
+  if(none){none.hidden=!empty;none.textContent=who==='user'?'这个对话里没有你发的消息':'这个对话里没有助理的回答';}
+}
+$('who').addEventListener('click',e=>{
+  const b=e.target.closest('button');if(!b||b.dataset.v===who)return;
+  stopPlay(true);who=b.dataset.v;applyWho();updateBar();
+  const s=$('scroll');s.scrollTop=0;
+});
 const toBottom=()=>{const s=$('scroll');s.scrollTop=s.scrollHeight;};
 function updateBar(){
   const n=msgEls().length;const p=$('play');
@@ -687,7 +719,7 @@ function updateBar(){
   p.setAttribute('aria-label',!pb.on?'从头回放':pb.paused?'继续回放':'暂停回放');
   p.disabled=!n;
   $('stop').hidden=!pb.on;
-  $('count').textContent=pb.on?((pb.paused?'已暂停 · ':'回放中 · ')+'第 '+pb.idx+' / '+n+' 条'):('从头回放 · 共 '+n+' 条消息');
+  $('count').textContent=pb.on?((pb.paused?'已暂停 · ':'回放中 · ')+'第 '+pb.idx+' / '+n+' 条'):('从头回放 · '+(who==='user'?'我的 ':who==='ai'?'助理的 ':'共 ')+n+' 条消息');
 }
 function step(){
   const els=msgEls();const typing=$('typing');
@@ -836,9 +868,13 @@ function fence(body){
   let longest=0;(String(body).match(/`+/g)||[]).forEach(r=>{if(r.length>longest)longest=r.length;});
   const f='`'.repeat(Math.max(3,longest+1));return f+'\n'+body+'\n'+f;
 }
+let expWho='all',expIds=[];
+const inScope=m=>expWho==='all'||(expWho==='user'?m.role==='user':m.role==='assistant');
+const scopeName=()=>expWho==='user'?'只含我的消息':expWho==='ai'?'只含助理的回答':'';
 function toText(c,o,asMd){
-  const L=[asMd?'# '+c.title:c.title,[o.time?tstr(c.created):'',c.msgs.length+' 条消息'].filter(Boolean).join(' · '),''];
-  for(const m of c.msgs){
+  const ms=c.msgs.filter(inScope);
+  const L=[asMd?'# '+c.title:c.title,[o.time?tstr(c.created):'',ms.length+' 条消息',scopeName()].filter(Boolean).join(' · '),''];
+  for(const m of ms){
     if(m.role==='tool'&&!o.tools)continue;
     const parts=[];
     for(const b of m.blocks){
@@ -868,7 +904,7 @@ function toText(c,o,asMd){
   return L.join('\n').trimEnd()+'\n';
 }
 function toRaw(c){
-  return {uuid:c.id,name:c.title,created_at:c.created||'',updated_at:c.updated||'',chat_messages:c.msgs.map(m=>{
+  return {uuid:c.id,name:c.title,created_at:c.created||'',updated_at:c.updated||'',chat_messages:c.msgs.filter(inScope).map(m=>{
     const content=[],attachments=[],files=[];
     for(const b of m.blocks){
       if(b.t==='text')content.push({type:'text',text:b.text});
@@ -884,7 +920,8 @@ function toRaw(c){
 const safeName=s=>(String(s).replace(/[\\/:*?"<>|#%\u0000-\u001f]/g,'_').replace(/\s+/g,' ').trim().slice(0,60)||'对话');
 let expFmt='md';
 function expOpts(){return {time:$('oTime').checked,think:$('oThink').checked,tools:$('oTools').checked};}
-function expList(){return data().filter(c=>picked.has(c.id));}
+function expList(){return data().filter(c=>expIds.includes(c.id));}
+const scopeTag=()=>expWho==='user'?'_我':expWho==='ai'?'_助理':'';
 function buildFiles(merge){
   const list=expList(),o=expOpts(),ext=expFmt;
   if(!list.length)return [];
@@ -893,20 +930,21 @@ function buildFiles(merge){
     if(ext==='json')text=JSON.stringify(list.map(toRaw),null,2);
     else if(ext==='md')text='# 导出的对话\n\n'+list.map((c,i)=>(i+1)+'. '+c.title).join('\n')+'\n\n---\n\n'+list.map(c=>toText(c,o,true)).join('\n---\n\n');
     else text='导出的对话\n\n'+list.map((c,i)=>(i+1)+'. '+c.title).join('\n')+'\n\n————————————\n\n'+list.map(c=>toText(c,o,false)).join('\n————————————\n\n');
-    return [{name:'对话导出_'+dstr()+'_'+list.length+'个.'+ext,text}];
+    return [{name:'对话导出_'+dstr()+'_'+list.length+'个'+scopeTag()+'.'+ext,text}];
   }
   const used=new Set();
   return list.map(c=>{
     const base=safeName(c.title)+(dstr(c.updated||c.created)?'_'+dstr(c.updated||c.created):'');
     let name=base,k=2;while(used.has(name))name=base+' ('+(k++)+')';used.add(name);
     const text=ext==='json'?JSON.stringify(toRaw(c),null,2):toText(c,o,ext==='md');
-    return {name:name+'.'+ext,text};
+    return {name:name+scopeTag()+'.'+ext,text};
   });
 }
 const MIME={md:'text/markdown',txt:'text/plain',json:'application/json'};
 const nativeExport=()=>!!(window.NativeBridge&&NativeBridge.saveFiles&&NativeBridge.shareFiles);
 function syncSheet(){
-  const n=picked.size;
+  const n=expIds.length;
+  [...$('expWhoSeg').children].forEach(b=>b.setAttribute('aria-checked',String(b.dataset.v===expWho)));
   $('sheetT').textContent='导出 '+n+' 个对话';
   [...$('fmt').children].forEach(b=>b.setAttribute('aria-checked',String(b.dataset.v===expFmt)));
   const isJson=expFmt==='json';
@@ -916,9 +954,11 @@ function syncSheet(){
   $('expSave').hidden=!nat;$('expShare').hidden=!nat;
   $('sheetHint').textContent=(isJson?'JSON 保留全部内容，可以再导入回来。':'')+(nat?(n>1&&!$('oMerge').checked?'保存时选一个文件夹，'+n+' 个文件会写进去。':''):'网页版不能保存文件，只能复制全文。安装的应用里可以保存和分享。');
 }
-function openSheet(){if(!picked.size){setStatus('先点选要导出的对话。');return;}syncSheet();$('sheetShade').hidden=false;$('sheet').hidden=false;}
+function openSheet(ids,scope){if(!ids.length){setStatus('先点选要导出的对话。');return;}expIds=ids;expWho=scope||'all';$('oMerge').checked=false;syncSheet();$('sheetShade').hidden=false;$('sheet').hidden=false;}
 function closeSheet(){$('sheetShade').hidden=true;$('sheet').hidden=true;}
-$('selExp').addEventListener('click',openSheet);
+$('selExp').addEventListener('click',()=>openSheet([...picked],'all'));
+$('headExp').addEventListener('click',()=>{const c=current();if(!c){setStatus('先打开一个对话。');return;}openSheet([c.id],who);});
+$('expWhoSeg').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;expWho=b.dataset.v;syncSheet();});
 $('sheetShade').addEventListener('click',closeSheet);
 $('fmt').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;expFmt=b.dataset.v;syncSheet();});
 $('oMerge').addEventListener('change',syncSheet);
@@ -927,7 +967,7 @@ function sendNative(kind){
     const files=buildFiles($('oMerge').checked);
     if(!files.length)return;
     NativeBridge[kind](JSON.stringify(files),MIME[expFmt]);
-    closeSheet();exitSelect();
+    closeSheet();if(selecting)exitSelect();
   }catch(e){setStatus('导出失败：'+e.message+'。对话太大时请少选几个再试。',true);}
 }
 $('expSave').addEventListener('click',()=>sendNative('saveFiles'));
@@ -937,7 +977,7 @@ $('expCopy').addEventListener('click',async()=>{
   const text=files[0].text;
   try{
     if(window.NativeBridge&&NativeBridge.copy)NativeBridge.copy(text);else await navigator.clipboard.writeText(text);
-    closeSheet();exitSelect();setStatus('已复制全文');
+    closeSheet();if(selecting)exitSelect();setStatus('已复制全文');
   }catch(e){setStatus('复制失败，内容可能太长。',true);}
 });
 
